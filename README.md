@@ -1,4 +1,4 @@
-# PRDM14 Gene Expression Analysis
+# PRDM14 Gene Expression Analysis Project
 
 ## Overview
 
