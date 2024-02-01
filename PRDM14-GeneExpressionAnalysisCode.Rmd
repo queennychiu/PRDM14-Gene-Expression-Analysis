@@ -1,0 +1,443 @@
+---
+title: "PRDM14 Gene Expression Analysis Code"
+output: html_notebook
+---
+
+This file contains the code used analyze the DataSet_01_045.txt file, which was downloaded from https://bio.liclab.net/KnockTFv2/download.php (search GSE22795). This dataset contains gene expression data from a study that investigated the gene changes after PRDM14 knockdown in human embryonic stem cells (hESCs). 
+
+
+
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("EnhancedVolcano")
+
+library(DESeq2)
+library(ggplot2)
+library(pheatmap)
+library(EnhancedVolcano)
+
+packageVersion("DESeq2")
+```
+
+**Step 1. Download Dataset**
+```{r}
+# source: https://bio.liclab.net/KnockTFv2/download.php, search GSE22795
+# read in txt file
+data3 <- read.table("DataSet_01_045.txt", header = TRUE, sep = "\t")
+head(data3)
+```
+
+```{r}
+str(data3)
+
+summary(data3)
+
+```
+**Step 2. Data Cleaning/Pre-Processing**
+```{r}
+# rename columns
+colnames(data3) <- c("Gene_Symbol", "Luci_KD1", "Luci_KD2", "Luci_KD3", "PRDM14_KD1", "PRDM14_KD2", "PRDM14_KD3")
+head(data3)
+```
+
+
+```{r}
+sum(duplicated(data3)) # no duplicates
+```
+
+```{r}
+which(is.na(data3)) # no NAs
+```
+
+```{r}
+genenames <- data3$Gene_Symbol
+head(genenames)
+```
+
+```{r}
+data3 <- data3[,2:7]
+rownames(data3) <- genenames
+```
+
+
+```{r}
+data3 <- as.matrix(data3)
+class(data3)
+```
+
+```{r}
+# define experimental condition - treatment or control
+coldata <- data.frame("condition"=as.factor(c(rep("Control",3), rep("Treatment",3))), row.names=colnames(data3))
+```
+
+
+```{r}
+head(data3)
+```
+**Step 3. Gene Expression Analysis**
+```{r}
+library("heatmap3")
+pdf("Heatmap.pdf")
+heatmap3(cor(data3), symm = TRUE, mar = c(10, 10))
+dev.off()
+```
+```{r}
+#sparse inverse covariance
+library(glasso)
+inv<-glasso(var(data3),rho=0.01)$wi
+inv[inv>3]<- 3
+rownames(inv)<-colnames(data3)
+colnames(inv)<-colnames(data3)
+pdf("SparseInverseCovariance.pdf")
+heatmap3(inv,symm=TRUE, mar = c(10, 10))
+dev.off()
+```
+
+
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = round(data3), colData = coldata, design = ~ condition)
+dds
+```
+
+```{r}
+dds <- DESeq(dds)
+```
+
+```{r}
+normal_counts <- counts(dds, normalized = TRUE)
+head(normal_counts)
+
+write.csv(normal_counts, file = "normal_counts.csv")
+```
+
+```{r}
+res <- results(dds, contrast = c("condition", "Treatment", "Control"), alpha = 0.05)
+res
+write.csv(res, file = "res.csv")
+```
+
+```{r}
+summary(res)
+```
+2341 (14%) genes were upregulated and 1437 (9%) genes were downregulated in the treatment group compared to the control group.
+
+
+```{r}
+# scatter plot of differential expression from normal_counts dataframe, where x-axis is gene expression level of controls and y-axis is treatment
+
+# Luci_KD1 vs. PRDM14_KD1
+plot(normal_counts[,1], normal_counts[,4], xlab = "Control", ylab = "PRDM14 Knockdown", main = "Scatter Plot of Differential Expression", xlim = c(0, 10000), ylim = c(0, 10000))
+
+# Luci_KD2 vs. PRDM14_KD2
+points(normal_counts[,2], normal_counts[,5])
+
+# Luci_KD3 vs. PRDM14_KD3
+points(normal_counts[,3], normal_counts[,6])
+
+# draw a line at y = x
+abline(0, 1)
+
+# highlight upregulated genes in green
+points(normal_counts[which(res$log2FoldChange > 1),1], normal_counts[which(res$log2FoldChange > 1),4], col = "green")
+points(normal_counts[which(res$log2FoldChange > 1),2], normal_counts[which(res$log2FoldChange > 1),5], col = "green")
+points(normal_counts[which(res$log2FoldChange > 1),3], normal_counts[which(res$log2FoldChange > 1),6], col = "green")
+
+# highlight downregulated genes in purple
+points(normal_counts[which(res$log2FoldChange < -1),1], normal_counts[which(res$log2FoldChange < -1),4], col = "purple")
+points(normal_counts[which(res$log2FoldChange < -1),2], normal_counts[which(res$log2FoldChange < -1),5], col = "purple")
+points(normal_counts[which(res$log2FoldChange < -1),3], normal_counts[which(res$log2FoldChange < -1),6], col = "purple")
+
+# add legend
+legend("bottomright", legend = c("Upregulated", "Non-Differential", "Downregulated"), col = c("green","black", "purple"), pch = 1)
+
+```
+
+```{r}
+# upregulated genes
+green_genes <- row.names(normal_counts[which(res$log2FoldChange > 1),])
+head(green_genes)
+length(green_genes)
+```
+
+```{r}
+# downregulated genes
+purple_genes <- row.names(normal_counts[which(res$log2FoldChange < -1),])
+head(purple_genes)
+length(purple_genes)
+```
+
+```{r}
+# non-differential genes
+black_genes <- row.names(normal_counts[which(res$log2FoldChange < 1 & res$log2FoldChange > -1),])
+head(black_genes)
+length(black_genes)
+```
+
+
+```{r}
+# MA plot to visualize gene expression changes
+
+plotMA(res, cex = 0.5, ylim=c(-6,6)) 
+abline(h = c(-1, 1), col = "red", lwd = 2)
+```
+
+```{r}
+# dispersion plot
+plotDispEsts(dds, main="Dispersion Plot")
+```
+
+```{r}
+# PCA plot
+rld <- rlogTransformation(dds, blind=FALSE)
+head(assay(rld))
+hist(assay(rld))
+
+PCAA <- plotPCA(rld, intgroup=c("condition"))
+PCAA + geom_text(aes(label=name), size=3) + ggtitle("PCA Plot") + ylim(-10, 10)
+```
+
+```{r fig.height=5, fig.width=10}
+
+EnhancedVolcano(res, 
+                lab = rownames(res), 
+                x = 'log2FoldChange', 
+                y = 'pvalue',
+                title = 'PRDM14 Knockdown vs. Control',
+                legendPosition = 'right')
+```
+
+```{r fig.height=5, fig.width=10}
+# volcano plot for:
+# markers of undifferentiated ESCs: "LIN28", "DNMT3B", "CLDN6", "IFITM1", "POU5F1", "ITGB1", "SFRP2", "GJA1", "SOX2", "CD9", "GAL", "LIN41", "IMP-2", "LECT1", "ZNF206", "GABRB3", "CYLTLIB", "UTF1", "NR6A1", "LEFTY1", "SCGB3A2", "KIT", "CKMT1", "TDGF1", "FOXD3", "DIAPH2", "NUMB", "CER1", "PMAIP1", "CDH1", "LEFTY2", "NANOG", "SMAD2", "BRIX", "REST", "ZFP42", "EDNRB", "PTEN", "NOG", "GDF3", "GBX2", "TFCP2L1", "COMMD3", "TERT", "PODXL", "FGF4", "NR5A2", "IFITM2", "GRB7", "DPPA5", "NODAL", "LCK", "NTS", "ITGBIBP3", "CHST4"
+
+
+
+# filter res df for genes of interest
+genes_of_interest <- res[rownames(res) %in% c("LIN28", "DNMT3B", "CLDN6", "IFITM1", "POU5F1", "ITGB1", "SFRP2", "GJA1", "SOX2", "CD9", "GAL", "LIN41", "IMP-2", "LECT1", "ZNF206", "GABRB3", "CYLTLIB", "UTF1", "NR6A1", "LEFTY1", "SCGB3A2", "KIT", "CKMT1", "TDGF1", "FOXD3", "DIAPH2", "NUMB", "CER1", "PMAIP1", "CDH1", "LEFTY2", "NANOG", "SMAD2", "BRIX", "REST", "ZFP42", "EDNRB", "PTEN", "NOG", "GDF3", "GBX2", "TFCP2L1", "COMMD3", "TERT", "PODXL", "FGF4", "NR5A2", "IFITM2", "GRB7", "DPPA5", "NODAL", "LCK", "NTS", "ITGBIBP3", "CHST4"),]
+
+
+# volcano plot
+EnhancedVolcano(genes_of_interest, 
+                lab = rownames(genes_of_interest), 
+                x = 'log2FoldChange', 
+                y = 'pvalue',
+                title = 'Gene Expression of Markers of Undifferentiated HESCs',
+                legendPosition = 'right')
+
+
+```
+
+```{r}
+# down regulated genes in the genes of interest?
+downregulated_genes <- row.names(normal_counts[which(res$log2FoldChange < -1 & rownames(res) %in% c("LIN28", "DNMT3B", "CLDN6", "IFITM1", "POU5F1", "ITGB1", "SFRP2", "GJA1", "SOX2", "CD9", "GAL", "LIN41", "IMP-2", "LECT1", "ZNF206", "GABRB3", "CYLTLIB", "UTF1", "NR6A1", "LEFTY1", "SCGB3A2", "KIT", "CKMT1", "TDGF1", "FOXD3", "DIAPH2", "NUMB", "CER1", "PMAIP1", "CDH1", "LEFTY2", "NANOG", "SMAD2", "BRIX", "REST", "ZFP42", "EDNRB", "PTEN", "NOG", "GDF3", "GBX2", "TFCP2L1", "COMMD3", "TERT", "PODXL", "FGF4", "NR5A2", "IFITM2", "GRB7", "DPPA5", "NODAL", "LCK", "NTS", "ITGBIBP3", "CHST4")),])
+downregulated_genes
+```
+
+```{r}
+# upregulated genes in the genes of interest
+upregulated_genes <- row.names(normal_counts[which(res$log2FoldChange > 1 & rownames(res) %in% c("LIN28", "DNMT3B", "CLDN6", "IFITM1", "POU5F1", "ITGB1", "SFRP2", "GJA1", "SOX2", "CD9", "GAL", "LIN41", "IMP-2", "LECT1", "ZNF206", "GABRB3", "CYLTLIB", "UTF1", "NR6A1", "LEFTY1", "SCGB3A2", "KIT", "CKMT1", "TDGF1", "FOXD3", "DIAPH2", "NUMB", "CER1", "PMAIP1", "CDH1", "LEFTY2", "NANOG", "SMAD2", "BRIX", "REST", "ZFP42", "EDNRB", "PTEN", "NOG", "GDF3", "GBX2", "TFCP2L1", "COMMD3", "TERT", "PODXL", "FGF4", "NR5A2", "IFITM2", "GRB7", "DPPA5", "NODAL", "LCK", "NTS", "ITGBIBP3", "CHST4")),])
+upregulated_genes
+```
+
+
+
+```{r fig.height=5, fig.width=10}
+# volcano plot for:
+# Ectoderm markers: VIM, CRABP2, SEMA3A, MSI1, MAP2, GFAP, OLIG2, SOX1, NES, NEUROD1, TH, TUBB3
+# filter res df for genes of interest
+ectoderm_markers <- res[rownames(res) %in% c("VIM", "CRABP2", "SEMA3A", "MSI1", "MAP2", "GFAP", "OLIG2", "SOX1", "NES", "NEUROD1", "TH", "TUBB3"),]
+
+
+# volcano plot
+EnhancedVolcano(ectoderm_markers, 
+                lab = rownames(ectoderm_markers), 
+                x = 'log2FoldChange', 
+                y = 'pvalue',
+                title = 'Gene Expression of Ectoderm Markers',
+                legendPosition = 'right')
+
+
+```
+
+```{r}
+# downregulated ectoderm markers
+downregulated_genes <- row.names(normal_counts[which(res$log2FoldChange < -1 & rownames(res) %in% c("VIM", "CRABP2", "SEMA3A", "MSI1", "MAP2", "GFAP", "OLIG2", "SOX1", "NES", "NEUROD1", "TH", "TUBB3")),])
+downregulated_genes
+```
+
+```{r}
+# upregulated ectoderm markers
+upregulated_genes <- row.names(normal_counts[which(res$log2FoldChange > 1 & rownames(res) %in% c("VIM", "CRABP2", "SEMA3A", "MSI1", "MAP2", "GFAP", "OLIG2", "SOX1", "NES", "NEUROD1", "TH", "TUBB3")),])
+upregulated_genes
+
+```
+
+```{r fig.height=5, fig.width=10}
+# volcano plot for:
+# endoderm markers: "FN1", "DCN", "H19", "AFP", "LAMB1", "LAMC1", "BMP2", "SERPINA1", "FLT1", "ACVRIB", "GATA4", "GCG", "INS", "PECAM1", "FABP2", "HNF4A", "FGF8", "HGF", "FOXA2"
+# filter res df for genes of interest
+endoderm_markers <- res[rownames(res) %in% c("FN1", "DCN", "H19", "AFP", "LAMB1", "LAMC1", "BMP2", "SERPINA1", "FLT1", "ACVRIB", "GATA4", "GCG", "INS", "PECAM1", "FABP2", "HNF4A", "FGF8", "HGF", "FOXA2"),]
+
+
+# volcano plot
+EnhancedVolcano(endoderm_markers, 
+                lab = rownames(endoderm_markers), 
+                x = 'log2FoldChange', 
+                y = 'pvalue',
+                title = 'Gene Expression of Endoderm Markers',
+                legendPosition = 'right')
+
+
+```
+
+```{r fig.height=5, fig.width=10}
+# volcano plot for:
+# mesoderm markers: "FN1", "DCN", "H19", "AFP", "LAMB1", "LAMC1", "BMP2", "SERPINA1", "FLT1", "ACVRIB", "GATA4", "GCG", "INS", "PECAM1", "FABP2", "HNF4A", "FGF8", "HGF", "FOXA2"
+# filter res df for genes of interest
+mesoderm_markers <- res[rownames(res) %in% c("COLIA1", "HAND1", "MSX1", "ACTC", "GATA6", "COL2A1", "HBZ", "T", "WT1", "MYF5", "DES", "NPPA", "HBB", "RUNX2", "IGF2", "EOMES", "CDX2", "GCM1", "KRT1", "SYCP3", "DDX4", "IFITM1", "IFITM2"),]
+
+
+# volcano plot
+EnhancedVolcano(mesoderm_markers, 
+                lab = rownames(mesoderm_markers), 
+                x = 'log2FoldChange', 
+                y = 'pvalue',
+                title = 'Gene Expression of Mesoderm Markers',
+                legendPosition = 'right')
+
+
+```
+
+```{r}
+# downregulated mesoderm markers
+downregulated_genes <- row.names(normal_counts[which(res$log2FoldChange < -1 & rownames(res) %in% c("COLIA1", "HAND1", "MSX1", "ACTC", "GATA6", "COL2A1", "HBZ", "T", "WT1", "MYF5", "DES", "NPPA", "HBB", "RUNX2", "IGF2", "EOMES", "CDX2", "GCM1", "KRT1", "SYCP3", "DDX4", "IFITM1", "IFITM2")),])
+downregulated_genes
+```
+
+
+```{r fig.height=5, fig.width=10}
+```
+
+
+```{r fig.height=5, fig.width=10}
+# volcano plot for:
+# core transcription factors: NANOG, OCT4, SOX2
+core_TF <- res[rownames(res) %in% c("NANOG", "SOX2", "POU5F1"),]
+
+
+# volcano plot
+EnhancedVolcano(core_TF, 
+                lab = rownames(core_TF), 
+                x = 'log2FoldChange', 
+                y = 'pvalue',
+                title = 'Gene Expression of Core Transcription Factors for Pluripotency',
+                legendPosition = 'right')
+
+
+```
+
+
+```{r fig.height=10, fig.width=5}
+#  heatmap
+library(pheatmap)
+
+top50 <- res[order(res$padj),][1:50,] # select top 50 genes
+
+top50 <- row.names(top50)
+
+pheatmap(assay(rld)[top50,], cluster_rows = TRUE, show_rownames = TRUE, cluster_cols = TRUE, annotation_col = coldata, main = "Heatmap of Top 50 Genes (p-adjusted)")
+
+top10
+```
+
+The heatmap shows the genes with the top 50 smallest adjusted p-values.
+A smaller adjusted p-value represents a greater statistical significance in the change in gene expression.
+
+
+```{r fig.height=10, fig.width=5}
+# define function to calculate z-score
+calculate_zscore <- function(x) {
+  (x - mean(x)) / sd(x)
+}
+
+# calculate z-score for each gene
+zscore  <- t(apply(normal_counts, 1, calculate_zscore))
+
+zscore_top <- zscore[top50,]
+
+# heatmap
+pheatmap(zscore_top, cluster_rows = TRUE, show_rownames = TRUE, cluster_cols = TRUE, annotation_col = coldata, main = "Heatmap of Top 50 Genes (Z-score)")
+```
+A z-score represents a gene's expression level compared to the mean expression level. A positive z-score indicates that the gene expression is upregulated, and a negative z-score indicates that the gene expression is downregulated. The heatmap shows that the genes with the top 50 smallest adjusted p-values are upregulated in the treatment group (PRDM14 knockdown) compared to the control group.
+
+```{r}
+zscore_top
+
+```
+
+
+
+
+**Step 4. Gene Ontology Analysis**
+
+```{r}
+# Find top 50 genes for GO analysis
+top50 <- res[order(res$padj),][1:50,]
+
+#print top50 gene names
+top50 <- row.names(top50)
+
+#print top50 as list with commas
+paste(top50, collapse = ", ")
+
+```
+Input the above top 50 genes into PANTHER (http://pantherdb.org/) to perform GO analysis.
+
+```{r}
+# read in GO analysis results: pantherChart.txt
+panther <- read.table("pantherChart.txt", header = TRUE, sep = "\t")
+panther
+
+```
+
+```{r}
+# find panther column names
+colnames(panther)
+```
+
+
+```{r}
+# plot bar chart of panther, where x-axis is the number of genes (x3) and y-axis is the GO term (transcription.regulator.activity..GO.0140110.)
+
+library(ggplot2)
+
+goplot <- ggplot(data = panther, aes(x = X3, y = transcription.regulator.activity..GO.0140110.)) + 
+  geom_bar(stat = "identity") +
+  labs(x = "Number of Genes", y = "Molecular Function") +
+  ggtitle("Molecular Function of Top 50 Genes")
+
+goplot
+
+
+```
+
+```{r}
+# panther chart enriched pathways
+
+panther_pathway <- read.table("pantherChart_pathway.txt", header = TRUE, sep = "\t")
+panther_pathway
+```
+
+```{r}
+library(ggplot2)
+
+goplot <- ggplot(data = panther_pathway, aes(x = X2, y = Cadherin.signaling.pathway..P00012.)) + 
+  geom_bar(stat = "identity") +
+  labs(x = "Number of Genes", y = "Pathway") +
+  ggtitle("Pathways of Top 50 Genes")
+
+goplot
+```
+
